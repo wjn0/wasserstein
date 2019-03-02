@@ -8,24 +8,16 @@ class WGAE(object):
         self.hidden_size = hidden_size
         self.latent_size = latent_size
 
-    # loc:   N x P
-    # chol:  N x P x P
-    def _outer(self, loc, chol):
-        euc = tf.matmul(loc, tf.transpose(loc))
-        scale = tf.matmul(
-            chol,
-            tf.transpose(chol, perm=[0, 2, 1])
-        )
+    # loc: N x P (matrix of location parameters)
+    # fac: N x P x P (tensor of scale-generating factor parameters)
+    # out: N x N (similarity matrix)
+    def _outer(self, loc, fac):
+        euc = tf.einsum('ij,kj->ik', loc, loc)
+        scale = tf.einsum('ijk,ikl->ijl', fac, fac)
         scale_sqrt = tf.linalg.sqrtm(scale)
         bures = tf.linalg.trace(
             tf.linalg.sqrtm(
-                tf.matmul(
-                    tf.matmul(
-                        tf.tile(tf.expand_dims(scale_sqrt, 1), [1, self.N, 1, 1]),
-                        tf.tile(tf.expand_dims(scale, 0), [self.N, 1, 1, 1])
-                    ),
-                    tf.tile(tf.expand_dims(scale_sqrt, 1), [1, self.N, 1, 1])
-                )
+                tf.einsum('ijk,ikl,ilm->ijm', scale_sqrt, scale, scale_sqrt)
             )
         )
 
@@ -69,13 +61,13 @@ class WGAE(object):
         self.z_loc = tf.matmul(
             self.adjacency, tf.matmul(convolved, loc_weights)
         )
-        self.z_chol = tf.einsum(
+        self.z_fac = tf.einsum(
             'ij,jkl->ikl',
             self.adjacency,
             tf.einsum('ij,jkl->ikl', convolved, scale_weights)
         )
 
-        outer = self._outer(self.z_loc, self.z_chol)
+        outer = self._outer(self.z_loc, self.z_fac)
 
         self.recon_loss = tf.keras.metrics.MeanSquaredError()
         self.recon_loss.update_state(
